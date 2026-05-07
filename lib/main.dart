@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+
 void main() {
   runApp(MyApp());
 }
@@ -47,7 +48,31 @@ class _HomeScreenState extends State<HomeScreen> {
               child: ListView.builder(
                 itemCount: TaskRepository.tasks.length,
                 itemBuilder: (context, index) {
-                  return TaskCard(task: TaskRepository.tasks[index]);
+                  final task = TaskRepository.tasks[index];
+                  return Dismissible(
+                    key: ValueKey(task.title),
+                    direction: DismissDirection.endToStart,
+                    background: Container(
+                      color: Colors.red,
+                      alignment: Alignment.centerRight,
+                      padding: const EdgeInsets.only(right: 20.0),
+                      child: const Icon(Icons.delete, color: Colors.white,)
+                    ),
+                    onDismissed: (direction){
+                      setState(() {
+                        TaskRepository.tasks.remove(task);
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text("Zadanie usuniete: ${task.title}"),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: TaskCard(
+                      task: task,
+                    ),
+                  );
                 },
               ),
             ),
@@ -212,3 +237,4 @@ class AddTaskScreen extends StatelessWidget {
     );
   }
 }
+
