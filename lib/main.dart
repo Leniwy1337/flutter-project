@@ -1,7 +1,15 @@
 import 'package:flutter/material.dart';
-import 'task_api_service.dart';
+import 'Services/task_api_service.dart';
+import 'Services/task_local_database.dart';
+import 'Services/task_sync_service.dart';
+import 'Models/task.dart';
+import 'package:hive_ce_flutter/hive_flutter.dart';
+import 'dart:math';
 
-void main() {
+void main() async{
+  WidgetsFlutterBinding.ensureInitialized();
+  await Hive.initFlutter();
+  await Hive.openBox("tasks");
   runApp(MyApp());
 }
 
@@ -22,6 +30,18 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  int allTasksCount = 0;
+  int doneTasksCount = 0;
+  int todoTasksCount = 0;
+
+  void updateCounters(List<Task> tasks) {
+    setState(() {
+      allTasksCount = tasks.length;
+      doneTasksCount = tasks.where((task) => task.done).length;
+      todoTasksCount = tasks.where((task) => !task.done).length;
+    });
+  }
+
   String selectedFilter = "wszystkie";
   late Future<List<Task>> tasksFuture;
 
@@ -29,6 +49,18 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     tasksFuture = TaskApiService.fetchTasks();
+  }
+
+  Future<List<Task>> loadTasks() async {
+    await TaskSyncService.loadInitialDataIfNeeded();
+    return TaskLocalDatabase.getTasks();
+  }
+
+  Future<void> addTask(Task task) async {
+    await TaskLocalDatabase.addTask(task);
+    setState(() {
+      tasksFuture = loadTasks();
+    });
   }
 
   @override
@@ -54,11 +86,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: const Text("Anuluj"),
                         ),
                         TextButton(
-                          onPressed: () {
+                          onPressed: () async {
+                            await TaskLocalDatabase.deleteAllTasks();
+                            if (!context.mounted) return;
                             setState(() {
-                              tasks.clear(); 
+                              tasksFuture = loadTasks();
                             });
                             Navigator.pop(context);
+
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text("Wszystkie zadania zostały usunięte"),
@@ -93,6 +128,9 @@ class _HomeScreenState extends State<HomeScreen> {
           }
           
           final tasks = snapshot.data ?? [];
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            updateCounters(tasks);
+          });
           int completedCount = tasks.where((t) => t.done).length;
 
           List<Task> filteredTasks = tasks;
@@ -182,10 +220,12 @@ class _HomeScreenState extends State<HomeScreen> {
                           padding: const EdgeInsets.only(right: 20.0),
                           child: const Icon(Icons.delete, color: Colors.white)
                         ),
-                        onDismissed: (direction){
+                        onDismissed: (direction) async {
+                          await TaskLocalDatabase.deleteTask(task.id);
                           setState(() {
-                            tasks.remove(task);
+                            tasksFuture = loadTasks();
                           });
+
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text("Zadanie usunięte: ${task.title}"),
@@ -197,9 +237,18 @@ class _HomeScreenState extends State<HomeScreen> {
                           title: task.title,
                           subtitle: "termin: ${task.deadline} | priorytet: ${task.priority}",
                           done: task.done,
-                          onChanged: (value) {
+                          onChanged: (value) async {
+                            final updatedTask = Task(
+                              id: task.id,
+                              title: task.title,
+                              deadline: task.deadline,
+                              priority: task.priority,
+                              done: value ?? false,
+                            );
+
+                            await TaskLocalDatabase.updateTask(updatedTask);
                             setState(() {
-                              task.done = value!;
+                              tasksFuture = loadTasks();
                             });
                           },
                           onTap: () async {
@@ -210,11 +259,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             );
                             if (updatedTask != null) {
+                              await TaskLocalDatabase.updateTask(updatedTask);
                               setState(() {
-                                int repoIndex = tasks.indexOf(task);
-                                if(repoIndex != -1) {
-                                   tasks[repoIndex] = updatedTask;
-                                }
+                                tasksFuture = loadTasks();
                               });
                             }
                           },
@@ -256,11 +303,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
               ),
             );
-
             if (newTask != null) {
-              setState(() {
-                tasks.add(newTask);
-              });
+              await addTask(newTask);
             }
           }
         },
@@ -270,19 +314,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class Task {
-  final String title;
-  final String deadline;
-  bool done;
-  final String priority;
-
-  Task({
-    required this.title,
-    required this.deadline,
-    required this.done,
-    required this.priority,
-  });
-}
 
 class TaskCard extends StatelessWidget {
   final String title;
@@ -369,6 +400,7 @@ class AddTaskScreen extends StatelessWidget {
             ElevatedButton(
               onPressed: () {
                 final newTask = Task(
+                  id: Random().nextInt(1000000),
                   title: titleController.text,
                   deadline: deadlineController.text,
                   priority: priorityController.text,
@@ -451,6 +483,7 @@ class _EditTaskScreenState extends State<EditTaskScreen> {
             ElevatedButton(
               onPressed: () {
                 final updatedTask = Task(
+                  id: widget.task.id,
                   title: titleController.text,
                   deadline: deadlineController.text,
                   priority: priorityController.text,
